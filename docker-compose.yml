@@ -1,0 +1,23 @@
+---
+services:
+  weather-proxy:
+    build: .
+    container_name: weather-proxy
+    restart: unless-stopped
+    environment:
+      WEATHER_LOCATION: Amsterdam
+      WEATHER_TTL: 15m
+    networks:
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.weather-proxy.rule=Host(`weather.api.kjanat.com`)"
+      - "traefik.http.routers.weather-proxy.entrypoints=websecure"
+      - "traefik.http.routers.weather-proxy.tls=true"
+      - "traefik.http.routers.weather-proxy.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.weather-proxy.middlewares=rate-limit@file"
+      - "traefik.http.services.weather-proxy.loadbalancer.server.port=8080"
+
+networks:
+  traefik:
+    external: true
