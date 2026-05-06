@@ -143,25 +143,11 @@ func TestConcurrentRequestsDeduplicateFetches(t *testing.T) {
 	}
 }
 
-func TestSingleflightRechecksCache(t *testing.T) {
-	// Verifies the double-check locking inside the singleflight callback:
-	// when cache becomes fresh between the outer stale check and the
-	// singleflight callback execution, no redundant fetch occurs.
-	//
-	// Sequence:
-	// 1. Cache is expired
-	// 2. Request A passes outer check, enters singleflight, fetches, refreshes cache
-	// 3. Request B passed outer check concurrently (before A refreshed)
-	// 4. B's DoChan shared A's result (singleflight dedup) — no extra fetch
-	// 5. After A's flight, a THIRD request passes outer check but the
-	//    singleflight recheck inside the callback finds fresh cache → no fetch
-	//
-	// We test this by expiring cache after the first flight completes and
-	// verifying that staggered arrivals don't produce extra fetches.
+func TestSingleflightDeduplicatesExpiredFetches(t *testing.T) {
 	var requests atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		requests.Add(1)
-		time.Sleep(30 * time.Millisecond) // slow enough for concurrent arrivals
+		time.Sleep(30 * time.Millisecond)
 		_, _ = fmt.Fprint(w, "+10°C")
 	}))
 	t.Cleanup(upstream.Close)
@@ -184,7 +170,7 @@ func TestSingleflightRechecksCache(t *testing.T) {
 	}
 
 	// Cache is fresh — second call should be HIT, no fetch
-	value, status, err = c.get(ctx, client, upstream.URL, "Amsterdam", ttl)
+	_, status, err = c.get(ctx, client, upstream.URL, "Amsterdam", ttl)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,52 +182,55 @@ func TestSingleflightRechecksCache(t *testing.T) {
 	}
 
 	// Expire cache, then launch concurrent requests. Singleflight should
-	// coalesce them into 1 fetch. The recheck ensures that if a second
-	// singleflight group starts after the first completes, it sees fresh cache.
+	// coalesce them into 1 fetch.
 	c.mu.Lock()
 	c.fetchedAt = time.Time{}
 	c.mu.Unlock()
 
 	var wg sync.WaitGroup
+	errs := make(chan error, 10)
 	for range 10 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			c.get(ctx, client, upstream.URL, "Amsterdam", ttl)
+			value, status, err := c.get(ctx, client, upstream.URL, "Amsterdam", ttl)
+			if err != nil {
+				errs <- err
+				return
+			}
+			if value != "10C" {
+				errs <- fmt.Errorf("expected value 10C, got %q", value)
+				return
+			}
+			if status != cacheMiss && status != cacheHit {
+				errs <- fmt.Errorf("expected MISS or HIT, got %s", status)
+				return
+			}
+			errs <- nil
 		}()
 	}
 	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	// All 10 should have shared 1 singleflight, so total = 2 (initial + this batch)
 	if got := requests.Load(); got != 2 {
 		t.Fatalf("expected 2 total upstream requests, got %d", got)
 	}
-
-	// Now verify recheck directly: cache is fresh from the batch above.
-	// Manually mark outer check as stale, then call get.
-	// The singleflight callback's recheck should find fresh cache and return HIT.
-	// We do this by expiring fetchedAt, calling get in a goroutine (starts new
-	// singleflight), then immediately refreshing fetchedAt before the callback's
-	// recheck runs. Since the callback rechecks under lock, if we set fetchedAt
-	// to now before the lock acquisition inside the callback, it should see fresh.
-	//
-	// This is inherently racy in a test, so we verify the weaker property:
-	// after the batch refresh, the next call sees HIT (outer check succeeds).
-	value, status, err = c.get(ctx, client, upstream.URL, "Amsterdam", ttl)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if status != cacheHit {
-		t.Fatalf("expected HIT after batch refresh, got %s", status)
-	}
-	if got := requests.Load(); got != 2 {
-		t.Fatalf("expected still 2 requests, got %d", got)
-	}
 }
 
 func TestCancelledCallerDoesNotPoisonSharedFetch(t *testing.T) {
 	gate := make(chan struct{})
+	entered := make(chan struct{})
+	var requests atomic.Int32
+	var enterOnce sync.Once
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		enterOnce.Do(func() { close(entered) })
 		<-gate
 		_, _ = fmt.Fprint(w, "+10°C")
 	}))
@@ -251,42 +240,44 @@ func TestCancelledCallerDoesNotPoisonSharedFetch(t *testing.T) {
 
 	// Request 1: will be cancelled
 	ctx1, cancel1 := context.WithCancel(context.Background())
-	var wg sync.WaitGroup
-	wg.Add(1)
+	done1 := make(chan struct{})
 	go func() {
-		defer wg.Done()
+		defer close(done1)
 		req := httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx1)
 		res := httptest.NewRecorder()
 		handler.ServeHTTP(res, req)
 		// After cancel, this may return error — that's fine for caller 1
 	}()
+	<-entered
+	cancel1()
 
 	// Request 2: patient caller
 	var res2 *httptest.ResponseRecorder
-	wg.Add(1)
+	started2 := make(chan struct{})
+	done2 := make(chan struct{})
 	go func() {
-		defer wg.Done()
-		time.Sleep(10 * time.Millisecond) // ensure it joins the singleflight
+		defer close(done2)
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		res2 = httptest.NewRecorder()
+		close(started2)
 		handler.ServeHTTP(res2, req)
 	}()
-
-	// Cancel caller 1 while fetch is in-flight
-	time.Sleep(20 * time.Millisecond)
-	cancel1()
+	<-started2
 
 	// Release upstream — the fetch should still complete for caller 2
-	time.Sleep(10 * time.Millisecond)
 	close(gate)
-	wg.Wait()
+	<-done1
+	<-done2
 
 	// Caller 2 should have gotten a valid response
 	if res2.Code != http.StatusOK {
 		t.Fatalf("expected caller 2 to get 200, got %d (body: %s)", res2.Code, res2.Body.String())
 	}
-	if got := res2.Header().Get("X-Weather-Cache"); got != "MISS" {
-		t.Fatalf("expected X-Weather-Cache MISS, got %q", got)
+	if got := res2.Header().Get("X-Weather-Cache"); got != "MISS" && got != "HIT" {
+		t.Fatalf("expected X-Weather-Cache MISS or HIT, got %q", got)
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("expected 1 upstream request, got %d", got)
 	}
 }
 
@@ -299,30 +290,33 @@ func TestMethodNotAllowed(t *testing.T) {
 	handler := newHandler(&cache{}, upstream.Client(), upstream.URL, "Amsterdam", 15*time.Minute)
 
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
-		t.Run(method, func(t *testing.T) {
-			res := httptest.NewRecorder()
-			handler.ServeHTTP(res, httptest.NewRequest(method, "/", nil))
-			if res.Code != http.StatusMethodNotAllowed {
-				t.Fatalf("expected 405 for %s, got %d", method, res.Code)
-			}
-			if got := res.Header().Get("Allow"); got != "GET, HEAD" {
-				t.Fatalf("expected Allow: GET, HEAD, got %q", got)
-			}
-		})
+		for _, path := range []string{"/", "/healthz", "/favicon.ico"} {
+			t.Run(method+" "+path, func(t *testing.T) {
+				res := httptest.NewRecorder()
+				handler.ServeHTTP(res, httptest.NewRequest(method, path, nil))
+				if res.Code != http.StatusMethodNotAllowed {
+					t.Fatalf("expected 405 for %s %s, got %d", method, path, res.Code)
+				}
+				if got := res.Header().Get("Allow"); got != "GET, HEAD" {
+					t.Fatalf("expected Allow: GET, HEAD, got %q", got)
+				}
+			})
+		}
 	}
 }
 
 func TestMustURLRejectsNonHTTPSchemes(t *testing.T) {
 	// mustURL uses log.Fatalf which calls os.Exit — not recoverable.
-	// Instead, test the validation logic directly by checking what mustURL
-	// would accept. We verify the scheme restriction exists by confirming
-	// valid HTTP(S) URLs pass and testing the exported validation function.
+	// Instead, test the validation logic directly.
 	for _, tc := range []struct {
 		raw   string
 		valid bool
 	}{
 		{"https://example.com", true},
+		{"https://example.com/base", true},
 		{"http://example.com", true},
+		{"https://example.com?token=x", false},
+		{"https://example.com#weather", false},
 		{"ftp://example.com", false},
 		{"gopher://hole.example.com", false},
 	} {

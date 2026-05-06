@@ -68,11 +68,6 @@ func newHandler(c *cache, client *http.Client, upstream, location string, ttl ti
 			http.NotFound(w, r)
 			return
 		}
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			w.Header().Set("Allow", "GET, HEAD")
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
 
 		value, status, err := c.get(r.Context(), client, upstream, location, ttl)
 		if err != nil {
@@ -98,7 +93,18 @@ func newHandler(c *cache, client *http.Client, upstream, location string, ttl ti
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	return mux
+	return methodGuard(mux)
+}
+
+func methodGuard(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (c *cache) get(ctx context.Context, client *http.Client, upstream, location string, ttl time.Duration) (string, cacheStatus, error) {
@@ -206,7 +212,7 @@ func envDuration(key string, fallback time.Duration) time.Duration {
 
 func isValidUpstreamURL(raw string) bool {
 	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
+	if err != nil || u.Host == "" || u.RawQuery != "" || u.Fragment != "" {
 		return false
 	}
 	return u.Scheme == "http" || u.Scheme == "https"
