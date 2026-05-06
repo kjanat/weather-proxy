@@ -26,7 +26,7 @@ func TestRootFetchesAndCachesWeather(t *testing.T) {
 
 	first := httptest.NewRecorder()
 	handler.ServeHTTP(first, httptest.NewRequest(http.MethodGet, "/", nil))
-	assertResponse(t, first, http.StatusOK, "10C\n", "HIT")
+	assertResponse(t, first, http.StatusOK, "10C\n", "MISS")
 	if got := first.Header().Get("Cache-Control"); got != "public, max-age=900" {
 		t.Fatalf("unexpected cache-control: %q", got)
 	}
@@ -55,7 +55,7 @@ func TestRootReturnsStaleWeatherWhenRefreshFails(t *testing.T) {
 
 	first := httptest.NewRecorder()
 	handler.ServeHTTP(first, httptest.NewRequest(http.MethodGet, "/", nil))
-	assertResponse(t, first, http.StatusOK, "10C\n", "HIT")
+	assertResponse(t, first, http.StatusOK, "10C\n", "MISS")
 
 	time.Sleep(time.Millisecond)
 	second := httptest.NewRecorder()

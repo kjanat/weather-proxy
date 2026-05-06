@@ -12,13 +12,24 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 //go:embed favicon.ico
 var faviconICO []byte
 
+type cacheStatus string
+
+const (
+	cacheHit   cacheStatus = "HIT"
+	cacheMiss  cacheStatus = "MISS"
+	cacheStale cacheStatus = "STALE"
+)
+
 type cache struct {
 	mu        sync.Mutex
+	group     singleflight.Group
 	value     string
 	fetchedAt time.Time
 }
@@ -27,39 +38,45 @@ func main() {
 	addr := env("LISTEN_ADDR", ":8080")
 	location := env("WEATHER_LOCATION", "Amsterdam")
 	ttl := envDuration("WEATHER_TTL", 15*time.Minute)
-	upstream := env("WEATHER_UPSTREAM", "https://wttr.in")
+	upstream := mustURL(env("WEATHER_UPSTREAM", "https://wttr.in"))
 
 	handler := newHandler(&cache{}, &http.Client{Timeout: 5 * time.Second}, upstream, location, ttl)
 
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 2 * time.Second,
+		ReadTimeout:       5 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+
 	log.Printf("weather-proxy listening on %s location=%s ttl=%s", addr, location, ttl)
-	log.Fatal(http.ListenAndServe(addr, handler))
+	log.Fatal(srv.ListenAndServe())
 }
 
 func newHandler(c *cache, client *http.Client, upstream, location string, ttl time.Duration) http.Handler {
-	handler := func(w http.ResponseWriter, r *http.Request) {
+	weatherHandler := func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
 			return
 		}
 
-		value, stale, err := c.get(r.Context(), client, upstream, location, ttl)
+		value, status, err := c.get(r.Context(), client, upstream, location, ttl)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
+			log.Printf("weather fetch failed: %v", err)
+			http.Error(w, "bad gateway", http.StatusBadGateway)
 			return
 		}
 
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Header().Set("Cache-Control", fmt.Sprintf("public, max-age=%d", int(ttl.Seconds())))
-		if stale {
-			w.Header().Set("X-Weather-Cache", "STALE")
-		} else {
-			w.Header().Set("X-Weather-Cache", "HIT")
-		}
+		w.Header().Set("X-Weather-Cache", string(status))
 		_, _ = fmt.Fprintln(w, value)
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", handler)
+	mux.HandleFunc("/", weatherHandler)
 	mux.HandleFunc("/favicon.ico", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "image/x-icon")
 		w.Header().Set("Cache-Control", "public, max-age=86400")
@@ -72,32 +89,34 @@ func newHandler(c *cache, client *http.Client, upstream, location string, ttl ti
 	return mux
 }
 
-func (c *cache) get(ctx context.Context, client *http.Client, upstream, location string, ttl time.Duration) (string, bool, error) {
+func (c *cache) get(ctx context.Context, client *http.Client, upstream, location string, ttl time.Duration) (string, cacheStatus, error) {
 	c.mu.Lock()
 	if c.value != "" && time.Since(c.fetchedAt) < ttl {
 		value := c.value
 		c.mu.Unlock()
-		return value, false, nil
+		return value, cacheHit, nil
 	}
 	c.mu.Unlock()
 
-	value, err := fetch(ctx, client, upstream, location)
+	result, err, _ := c.group.Do("weather", func() (any, error) {
+		return fetch(ctx, client, upstream, location)
+	})
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if err != nil {
 		if c.value != "" {
-			return c.value, true, nil
+			return c.value, cacheStale, nil
 		}
-		return "", false, err
+		return "", "", err
 	}
-	c.value = value
+	c.value = result.(string)
 	c.fetchedAt = time.Now()
-	return c.value, false, nil
+	return c.value, cacheMiss, nil
 }
 
 func fetch(ctx context.Context, client *http.Client, upstream, location string) (string, error) {
-	endpoint := strings.TrimRight(upstream, "/") + "/" + url.PathEscape(location) + "?m&format=%t"
+	endpoint := upstream + "/" + url.PathEscape(location) + "?m&format=%t"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return "", err
@@ -117,7 +136,7 @@ func fetch(ctx context.Context, client *http.Client, upstream, location string) 
 		return "", fmt.Errorf("upstream returned %s", res.Status)
 	}
 
-	body, err := io.ReadAll(io.LimitReader(res.Body, 128))
+	body, err := io.ReadAll(io.LimitReader(res.Body, 1024))
 	if err != nil {
 		return "", err
 	}
@@ -143,9 +162,17 @@ func envDuration(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	duration, err := time.ParseDuration(value)
-	if err != nil {
+	if err != nil || duration <= 0 {
 		log.Printf("invalid %s=%q, using %s", key, value, fallback)
 		return fallback
 	}
 	return duration
+}
+
+func mustURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		log.Fatalf("invalid WEATHER_UPSTREAM=%q", raw)
+	}
+	return strings.TrimRight(raw, "/")
 }
