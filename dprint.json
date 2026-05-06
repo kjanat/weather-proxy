@@ -4,8 +4,12 @@
   "markdown": {
   },
   "markup": {
+    "associations": ["!**/*.svg"]
   },
   "yaml": {
+  },
+  "svg": {
+    "associations": ["**/*.svg"]
   },
   "excludes": [
     "**/*-lock.json"
