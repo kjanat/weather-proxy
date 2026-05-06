@@ -68,8 +68,8 @@ func TestDockerImageBuildsAndServesRequests(t *testing.T) {
 	baseURL := "http://" + addr
 	waitForHealthz(t, ctx, baseURL)
 
-	assertWeather(t, ctx, baseURL, http.MethodGet, http.StatusOK, "10C\n", "MISS")
-	assertWeather(t, ctx, baseURL, http.MethodGet, http.StatusOK, "10C\n", "HIT")
+	assertWeather(t, ctx, baseURL, http.MethodGet, http.StatusOK, "10C", "MISS")
+	assertWeather(t, ctx, baseURL, http.MethodGet, http.StatusOK, "10C", "HIT")
 	if got := requests.Load(); got != 1 {
 		t.Fatalf("expected cached weather to use 1 upstream request, got %d", got)
 	}

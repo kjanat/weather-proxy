@@ -79,7 +79,7 @@ func newHandler(c *cache, client *http.Client, upstream, location string, ttl ti
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Header().Set("Cache-Control", fmt.Sprintf("public, max-age=%d", int(ttl.Seconds())))
 		w.Header().Set("X-Weather-Cache", string(status))
-		_, _ = fmt.Fprintln(w, value)
+		_, _ = fmt.Fprint(w, value)
 	}
 
 	mux := http.NewServeMux()

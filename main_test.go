@@ -29,14 +29,14 @@ func TestRootFetchesAndCachesWeather(t *testing.T) {
 
 	first := httptest.NewRecorder()
 	handler.ServeHTTP(first, httptest.NewRequest(http.MethodGet, "/", nil))
-	assertResponse(t, first, http.StatusOK, "10C\n", "MISS")
+	assertResponse(t, first, http.StatusOK, "10C", "MISS")
 	if got := first.Header().Get("Cache-Control"); got != "public, max-age=900" {
 		t.Fatalf("unexpected cache-control: %q", got)
 	}
 
 	second := httptest.NewRecorder()
 	handler.ServeHTTP(second, httptest.NewRequest(http.MethodGet, "/", nil))
-	assertResponse(t, second, http.StatusOK, "10C\n", "HIT")
+	assertResponse(t, second, http.StatusOK, "10C", "HIT")
 	if requests != 1 {
 		t.Fatalf("expected one upstream request, got %d", requests)
 	}
@@ -58,12 +58,12 @@ func TestRootReturnsStaleWeatherWhenRefreshFails(t *testing.T) {
 
 	first := httptest.NewRecorder()
 	handler.ServeHTTP(first, httptest.NewRequest(http.MethodGet, "/", nil))
-	assertResponse(t, first, http.StatusOK, "10C\n", "MISS")
+	assertResponse(t, first, http.StatusOK, "10C", "MISS")
 
 	time.Sleep(time.Millisecond)
 	second := httptest.NewRecorder()
 	handler.ServeHTTP(second, httptest.NewRequest(http.MethodGet, "/", nil))
-	assertResponse(t, second, http.StatusOK, "10C\n", "STALE")
+	assertResponse(t, second, http.StatusOK, "10C", "STALE")
 }
 
 func TestRootFailsWhenUpstreamFailsWithoutCache(t *testing.T) {
