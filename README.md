@@ -46,7 +46,7 @@ Status codes:
 
 ### `GET /favicon.ico`
 
-Returns the service favicon as SVG image data.
+Returns the service favicon as ICO image data.
 
 Status codes:
 

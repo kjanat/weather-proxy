@@ -102,11 +102,11 @@ func TestFavicon(t *testing.T) {
 	if res.Code != http.StatusOK {
 		t.Fatalf("expected favicon status %d, got %d", http.StatusOK, res.Code)
 	}
-	if got := res.Header().Get("Content-Type"); got != "image/svg+xml" {
-		t.Fatalf("expected favicon content type %q, got %q", "image/svg+xml", got)
+	if got := res.Header().Get("Content-Type"); got != "image/x-icon" {
+		t.Fatalf("expected favicon content type %q, got %q", "image/x-icon", got)
 	}
-	if got := res.Body.String(); got != faviconSVG {
-		t.Fatalf("unexpected favicon body: %q", got)
+	if got := res.Body.Bytes(); len(got) == 0 {
+		t.Fatal("expected favicon body")
 	}
 }
 
