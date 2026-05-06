@@ -25,9 +25,13 @@ func main() {
 	ttl := envDuration("WEATHER_TTL", 15*time.Minute)
 	upstream := env("WEATHER_UPSTREAM", "https://wttr.in")
 
-	c := &cache{}
-	client := &http.Client{Timeout: 5 * time.Second}
+	handler := newHandler(&cache{}, &http.Client{Timeout: 5 * time.Second}, upstream, location, ttl)
 
+	log.Printf("weather-proxy listening on %s location=%s ttl=%s", addr, location, ttl)
+	log.Fatal(http.ListenAndServe(addr, handler))
+}
+
+func newHandler(c *cache, client *http.Client, upstream, location string, ttl time.Duration) http.Handler {
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
@@ -56,8 +60,7 @@ func main() {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	log.Printf("weather-proxy listening on %s location=%s ttl=%s", addr, location, ttl)
-	log.Fatal(http.ListenAndServe(addr, mux))
+	return mux
 }
 
 func (c *cache) get(ctx context.Context, client *http.Client, upstream, location string, ttl time.Duration) (string, bool, error) {
@@ -95,7 +98,11 @@ func fetch(ctx context.Context, client *http.Client, upstream, location string) 
 	if err != nil {
 		return "", err
 	}
-	defer res.Body.Close()
+	defer func() {
+		if err := res.Body.Close(); err != nil {
+			log.Printf("failed to close upstream response body: %v", err)
+		}
+	}()
 
 	if res.StatusCode < 200 || res.StatusCode > 299 {
 		return "", fmt.Errorf("upstream returned %s", res.Status)
