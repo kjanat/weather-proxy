@@ -6,6 +6,8 @@ It fetches upstream weather from `wttr.in`, normalizes the response to a compact
 
 ## Public API
 
+Public base URL: `https://weather.api.kjanat.com/`
+
 ### `GET /`
 
 Returns the current cached weather value as plain text.
@@ -41,6 +43,14 @@ Health check endpoint.
 Status codes:
 
 - `204 No Content`: service is running
+
+### `GET /favicon.ico`
+
+Returns the service favicon as SVG image data.
+
+Status codes:
+
+- `200 OK`: favicon returned
 
 ### Other Paths
 

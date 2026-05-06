@@ -94,6 +94,22 @@ func TestHealthzAndUnknownPath(t *testing.T) {
 	}
 }
 
+func TestFavicon(t *testing.T) {
+	handler := newHandler(&cache{}, http.DefaultClient, "http://example.invalid", "Amsterdam", 15*time.Minute)
+
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/favicon.ico", nil))
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected favicon status %d, got %d", http.StatusOK, res.Code)
+	}
+	if got := res.Header().Get("Content-Type"); got != "image/svg+xml" {
+		t.Fatalf("expected favicon content type %q, got %q", "image/svg+xml", got)
+	}
+	if got := res.Body.String(); got != faviconSVG {
+		t.Fatalf("unexpected favicon body: %q", got)
+	}
+}
+
 func assertResponse(t *testing.T, res *httptest.ResponseRecorder, status int, body, cacheHeader string) {
 	t.Helper()
 	if res.Code != status {

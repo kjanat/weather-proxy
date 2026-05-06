@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+const faviconSVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#0f172a"/><circle cx="28" cy="24" r="12" fill="#facc15"/><path d="M18 42h30a9 9 0 0 0-2-17 14 14 0 0 0-26 6h-2a6 6 0 0 0 0 12Z" fill="#e2e8f0"/></svg>`
+
 type cache struct {
 	mu        sync.Mutex
 	value     string
@@ -56,6 +58,11 @@ func newHandler(c *cache, client *http.Client, upstream, location string, ttl ti
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", handler)
+	mux.HandleFunc("/favicon.ico", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "image/svg+xml")
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		_, _ = fmt.Fprint(w, faviconSVG)
+	})
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
