@@ -58,7 +58,8 @@ func main() {
 		IdleTimeout:       60 * time.Second,
 	}
 
-	log.Printf("weather-proxy listening on %s location=%s ttl=%s", addr, location, ttl)
+	log.Printf("weather-proxy %s (commit %s, built %s) listening on %s location=%s ttl=%s",
+		version, commit, date, addr, location, ttl)
 	log.Fatal(srv.ListenAndServe())
 }
 
