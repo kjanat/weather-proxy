@@ -28,6 +28,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -72,6 +73,11 @@ func main() {
 			}
 			log.Printf("building %s (%s/%s) version=%s commit=%s date=%s",
 				path, t.goos, t.goarch, version, commit, date)
+			if dir := filepath.Dir(path); dir != "." {
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					return err
+				}
+			}
 			env := []string{"CGO_ENABLED=0", "GOOS=" + t.goos, "GOARCH=" + t.goarch}
 			if err := runCmd(env, "go", "build", "-trimpath", "-ldflags", ldflags, "-o", path, "."); err != nil {
 				return err
@@ -91,7 +97,7 @@ func parseTargets(spec string) ([]target, bool) {
 		return []target{{runtime.GOOS, runtime.GOARCH}}, false
 	}
 	var ts []target
-	for _, part := range strings.Split(spec, ",") {
+	for part := range strings.SplitSeq(spec, ",") {
 		p := strings.TrimSpace(part)
 		if p == "" {
 			continue

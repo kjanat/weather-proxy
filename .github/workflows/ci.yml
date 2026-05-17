@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: vet, test, cross-build
+        id: build
+        env:
+          TARGETS: linux/amd64,linux/arm64
+        run: go run build.go dist/weather-proxy
+
+      - name: Summarize build metadata
+        run: |
+          echo '${{ steps.build.outputs.build-meta }}' | tee "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: weather-proxy-binaries
+          path: dist/
+          if-no-files-found: error
