@@ -4,9 +4,12 @@ services:
     build: .
     container_name: weather-proxy
     restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
     environment:
-      WEATHER_LOCATION: Amsterdam
-      WEATHER_TTL: 15m
+      WEATHER_LOCATION: ${WEATHER_LOCATION:-Amsterdam}
+      WEATHER_TTL: ${WEATHER_TTL:-15m}
     networks:
       - traefik
     labels:

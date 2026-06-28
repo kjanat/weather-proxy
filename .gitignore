@@ -1,1 +1,3 @@
 /weather-proxy
+/.env
+/docker-compose.override.yml
